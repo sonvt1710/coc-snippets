@@ -1,5 +1,8 @@
 import { Disposable, Document, Extension, extensions, OutputChannel, Position, Range, Uri, workspace } from 'coc.nvim'
 import fs from 'fs'
+// Bundle the ESM entry explicitly: jsonc-parser's UMD main passes `require`
+// through a factory, which bundlers leave as an unresolved ./impl/* require
+// in output (coc-test virtual bundle with both rolldown and esbuild).
 import { parse, ParseError } from 'jsonc-parser/lib/esm/main.js'
 import path from 'path'
 import BaseProvider from './baseProvider'

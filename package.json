@@ -223,9 +223,9 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.19.39",
-    "coc-test": "^0.1.2",
+    "coc-test": "^0.1.3",
     "coc.nvim": "^0.0.83-next.25",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "jsonc-parser": "^3.0.0",
     "merge": "^2.1.1",
     "minimatch": "^5.1.8",
