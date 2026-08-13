@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, before, describe, it } from 'node:test'
-import { commands, Document, extensions, window, workspace } from 'coc.nvim'
+import { commands, Disposable, Document, extensions, window, workspace } from 'coc.nvim'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { MassCodeProvider } from '../src/massCodeProvider'
 import { SnipmateProvider } from '../src/snipmateProvider'
+import { TextmateProvider } from '../src/textmateProvider'
 import UltiSnipsParser from '../src/ultisnipsParser'
 import { UltiSnippetsProvider } from '../src/ultisnipsProvider'
 import { openBuffer, waitFor, waitProviderInit } from './helper'
@@ -279,6 +280,31 @@ describe('textmate snippet loading', () => {
         `javascript.json missing from: ${JSON.stringify(filesShown)}`)
     } finally {
       window.showQuickPick = original
+    }
+  })
+
+  it('reloads a saved .code-snippets file', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coc-snippets-textmate-save-'))
+    const subscriptions: Disposable[] = []
+    try {
+      const filepath = path.join(dir, 'reload.code-snippets')
+      fs.writeFileSync(filepath, JSON.stringify({ 'Old': { prefix: 'old', body: 'OLD' } }), 'utf8')
+      const channel = { appendLine: () => {} } as any
+      const config = { loadFromExtensions: false, snippetsRoots: [], projectSnippets: false, extends: {}, excludes: [], trace: false } as any
+      const provider = new TextmateProvider(channel, config, subscriptions)
+      await provider.loadSnippetsFromFile(filepath, undefined, undefined)
+      assert.equal(provider.getSnippets('javascript').some(s => s.prefix == 'old'), true)
+      let nvim = workspace.nvim
+      await nvim.command(`edit ${filepath}`)
+      await nvim.call('setline', [1, JSON.stringify({ 'New': { prefix: 'new', body: 'NEW' } })])
+      await nvim.command('write')
+      await waitFor(() => provider.getSnippets('javascript').some(s => s.prefix == 'new'))
+      assert.equal(provider.getSnippets('javascript').some(s => s.prefix == 'old'), false)
+    } finally {
+      for (let disposable of subscriptions) {
+        disposable.dispose()
+      }
+      fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 })

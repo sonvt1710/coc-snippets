@@ -22,19 +22,27 @@ export class UltiSnippetsProvider extends BaseProvider {
   ) {
     super(config, channel)
     workspace.onDidSaveTextDocument(async doc => {
-      let uri = Uri.parse(doc.uri)
-      if (uri.scheme != 'file' || !doc.uri.endsWith('.snippets')) return
-      let filepath = uri.fsPath
-      if (!fs.existsSync(filepath)) return
-      let idx = this.snippetFiles.findIndex(s => sameFile(s.filepath, filepath))
-      if (idx !== -1) {
-        const snippetFile = this.snippetFiles[idx]
-        this.snippetFiles.splice(idx, 1)
-        await this.loadSnippetsFromFile({ filetype: snippetFile.filetype, filepath, directory: snippetFile.directory })
-      } else {
-        let filetype = filetypeFromBasename(path.basename(filepath, '.snippets'))
-        if (this.allFiletypes.includes(filetype)) await this.loadSnippetsFromFile({ filetype, filepath, directory: path.dirname(filepath) })
+      try {
+        let uri = Uri.parse(doc.uri)
+        if (uri.scheme != 'file' || !doc.uri.endsWith('.snippets')) return
+        let filepath = uri.fsPath
+        if (!fs.existsSync(filepath)) return
+        let idx = this.snippetFiles.findIndex(s => sameFile(s.filepath, filepath))
+        if (idx !== -1) {
+          const snippetFile = this.snippetFiles[idx]
+          this.snippetFiles.splice(idx, 1)
+          await this.loadSnippetsFromFile({ filetype: snippetFile.filetype, filepath, directory: snippetFile.directory })
+        } else {
+          let filetype = filetypeFromBasename(path.basename(filepath, '.snippets'))
+          if (this.allFiletypes.includes(filetype)) await this.loadSnippetsFromFile({ filetype, filepath, directory: path.dirname(filepath) })
+        }
+      } catch (e: any) {
+        this.error(`Error on reload "${doc.uri}":`, e)
       }
+    }, null, this.context.subscriptions)
+    workspace.onDidCloseTextDocument(doc => {
+      let uri = Uri.parse(doc.uri)
+      if (uri.scheme == 'file') pythonCodes.delete(uri.fsPath)
     }, null, this.context.subscriptions)
   }
 
@@ -66,21 +74,25 @@ export class UltiSnippetsProvider extends BaseProvider {
     this.parser = new UltiSnipsParser(this.channel, this.config.trace)
     this.fileItems = await this.loadAllFileItems(env.runtimepath)
     workspace.onDidRuntimePathChange(async e => {
-      let subFolders = await this.getSubFolders()
-      const newItems: FileItem[] = []
-      for (const dir of e) {
-        let res = await this.getFilesFromDirectory(dir, subFolders)
-        if (res?.length) newItems.push(...res)
-      }
-      let items = newItems.filter(item => !this.fileItems.find(o => o.filepath === item.filepath))
-      if (items.length) {
-        this.fileItems.push(...items)
-        let { allFiletypes } = this
-        for (let item of items) {
-          if (allFiletypes.includes(item.filetype)) {
-            await this.loadSnippetsFromFile(item)
+      try {
+        let subFolders = await this.getSubFolders()
+        const newItems: FileItem[] = []
+        for (const dir of e) {
+          let res = await this.getFilesFromDirectory(dir, subFolders)
+          if (res?.length) newItems.push(...res)
+        }
+        let items = newItems.filter(item => !this.fileItems.find(o => o.filepath === item.filepath))
+        if (items.length) {
+          this.fileItems.push(...items)
+          let { allFiletypes } = this
+          for (let item of items) {
+            if (allFiletypes.includes(item.filetype)) {
+              await this.loadSnippetsFromFile(item)
+            }
           }
         }
+      } catch (e: any) {
+        this.error('Error on runtimepath change:', e)
       }
     }, null, this.context.subscriptions)
     if (this.pythonSupport) {
@@ -95,12 +107,16 @@ export class UltiSnippetsProvider extends BaseProvider {
     filetypes = filetypes.filter(filetype => !this.loadedLanguageIds.has(filetype))
     if (filetypes.length == 0) return
     let sorted = getSortedFiletypes(filetype, filetypes)
-    sorted.forEach(filetype => this.loadedLanguageIds.add(filetype))
     for (let ft of sorted) {
-      for (let item of this.fileItems) {
-        if (item.filetype === ft) {
-          await this.loadSnippetsFromFile(item)
+      try {
+        for (let item of this.fileItems) {
+          if (item.filetype === ft) {
+            await this.loadSnippetsFromFile(item)
+          }
         }
+        this.loadedLanguageIds.add(ft)
+      } catch (e: any) {
+        this.error(`Error on load "${ft}" snippets:`, e)
       }
     }
   }
@@ -149,7 +165,7 @@ export class UltiSnippetsProvider extends BaseProvider {
       await Promise.allSettled(promises)
     }
     this.info(`Loaded ${snippets.length} UltiSnip snippets from: ${filepath}`)
-    if (pythonCode.trim().length > 0) {
+    if (this.pythonSupport && pythonCode.trim().length > 0) {
       pythonCodes.set(filepath, { hash: createMD5(pythonCode), code: pythonCode })
       this.executePyCodesForFile(filepath).catch(e => {
         this.error(e.message)
@@ -414,6 +430,7 @@ export class UltiSnippetsProvider extends BaseProvider {
   }
 
   public async executePyCodesForFile(filepath: string): Promise<void> {
+    if (!this.pythonSupport) return
     let info = pythonCodes.get(filepath)
     if (!info) return
     let { code, hash } = info

@@ -8,7 +8,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { promisify } from 'util'
-import { ReplaceItem, SnippetEditWithSource, UltiSnippetOption } from './types'
+import { SnippetEditWithSource, UltiSnippetOption } from './types'
 
 export interface CodeInfo {
   readonly hash: string
@@ -23,7 +23,6 @@ export interface LastSnippet {
 export const pythonCodes: Map<string, CodeInfo> = new Map()
 
 const caseInsensitive = os.platform() == 'win32' || os.platform() == 'darwin'
-const BASE64 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_'
 const additionalFiletypes: Map<number, string[]> = new Map()
 var lastSnippet: LastSnippet = undefined
 
@@ -65,6 +64,10 @@ export function getAdditionalFiletype(bufnr: number): string[] {
   return additionalFiletypes.get(bufnr) ?? []
 }
 
+export function clearAdditionalFiletype(bufnr: number): void {
+  additionalFiletypes.delete(bufnr)
+}
+
 export function getAllAdditionalFiletype(): string[] {
   let filetypes: string[] = []
   workspace.documents.forEach(doc => {
@@ -77,19 +80,6 @@ export function getAllAdditionalFiletype(): string[] {
 export function getSnippetFiletype(doc: { bufnr: number, filetype: string }): string {
   let filetypes = getAdditionalFiletype(doc.bufnr)
   return [doc.filetype, ...filetypes].join('.')
-}
-
-function tostr(bytes: Uint8Array): string {
-  let r: string[] = []
-  let i
-  for (i = 0; i < bytes.length; i++) {
-    r.push(BASE64[bytes[i] % 64])
-  }
-  return r.join('')
-}
-
-export function uid(): string {
-  return tostr(crypto.randomBytes(10))
 }
 
 export function createMD5(input: string): string {
@@ -124,26 +114,6 @@ export const documentation = `# A valid snippet should starts with:
 `
 
 
-export function replaceText(content: string, items: ReplaceItem[]): string {
-  let res = ''
-  items.sort((a, b) => a.index - b.index)
-  let item = items.shift()
-  for (let i = 0; i < content.length; i++) {
-    let idx = item ? item.index : null
-    if (idx == null || i != idx) {
-      res = res + content[i]
-      continue
-    }
-    res = res + item.newText
-    i = i + item.length
-  }
-  return res
-}
-
-export function flatten<T>(arr: T[][]): T[] {
-  return arr.reduce((p, curr) => p.concat(curr), [])
-}
-
 export async function statAsync(filepath: string): Promise<fs.Stats> {
   try {
     return await promisify(fs.stat)(filepath)
@@ -165,24 +135,6 @@ export function headTail(line: string): [string, string] | null {
   let ms = line.match(/^(\S+)\s+(.*)/)
   if (!ms) return [line, '']
   return [ms[1], ms[2]]
-}
-
-export function memorize<R extends (...args: any[]) => Promise<R>>(_target: any, key: string, descriptor: any): void {
-  let fn = descriptor.get
-  if (typeof fn !== 'function') return
-  let memoKey = '$' + key
-
-  descriptor.get = function(...args): Promise<R> {
-    if (this.hasOwnProperty(memoKey)) return Promise.resolve(this[memoKey])
-    return new Promise((resolve, reject): void => { // tslint:disable-line
-      Promise.resolve(fn.apply(this, args)).then(res => {
-        this[memoKey] = res
-        resolve(res)
-      }, e => {
-        reject(e)
-      })
-    })
-  }
 }
 
 export function trimQuote(str: string): string {
@@ -285,30 +237,10 @@ export async function waitDocument(doc: Document, changedtick: number): Promise<
   })
 }
 
-export function isParentFolder(folder: string, filepath: string, checkEqual = false): boolean {
-  let pdir = fixDriver(path.resolve(path.normalize(folder)))
-  let dir = fixDriver(path.resolve(path.normalize(filepath)))
-  if (pdir == '//') pdir = '/'
-  if (sameFile(pdir, dir)) return checkEqual ? true : false
-  if (pdir.endsWith(path.sep)) return fileStartsWith(dir, pdir)
-  return fileStartsWith(dir, pdir) && dir[pdir.length] == path.sep
-}
-
-// use uppercase for windows driver
-export function fixDriver(filepath: string, platform = os.platform()): string {
-  if (platform != 'win32' || filepath[1] != ':') return filepath
-  return filepath[0].toUpperCase() + filepath.slice(1)
-}
-
 export function sameFile(fullpath: string | null, other: string | null): boolean {
   if (!fullpath || !other) return false
   if (caseInsensitive) return fullpath.toLowerCase() === other.toLowerCase()
   return fullpath === other
-}
-
-export function fileStartsWith(dir: string, pdir: string) {
-  if (caseInsensitive) return dir.toLowerCase().startsWith(pdir.toLowerCase())
-  return dir.startsWith(pdir)
 }
 
 export function characterIndex(content: string, byteIndex: number): number {

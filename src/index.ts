@@ -9,7 +9,7 @@ import { SnipmateProvider } from './snipmateProvider'
 import { TextmateProvider } from './textmateProvider'
 import { UltiSnipsConfig } from './types'
 import { getSnippetsDirectory, UltiSnippetsProvider } from './ultisnipsProvider'
-import { addFiletypes, getAdditionalFiletype, getSnippetFiletype, insertSnippetEdit, sameFile, setLastSnippet, waitDocument } from './util'
+import { addFiletypes, clearAdditionalFiletype, getAdditionalFiletype, getSnippetFiletype, insertSnippetEdit, sameFile, setLastSnippet, waitDocument } from './util'
 
 interface API {
   expandable: () => Promise<boolean>
@@ -26,15 +26,35 @@ export function checkBufferVariable(doc: Document): void {
   }
 }
 
+let snippetsFiletypeReady = false
+
 export function enableSnippetsFiletype(subscriptions: Disposable[]) {
   let { nvim } = workspace
-  const rtp = workspace.env.runtimepath
-  let paths = rtp.split(',')
-  let idx = paths.findIndex(s => /^ultisnips$/i.test(path.basename(s)))
-  if (idx === -1 && !workspace.env.isCygwin) {
-    let directory = path.resolve(__dirname, '..')
-    nvim.command('autocmd BufNewFile,BufRead *.snippets setf snippets', true)
-    nvim.command(`execute 'noa set rtp+='.fnameescape('${directory.replace(/'/g, "''")}')`, true)
+  if (!snippetsFiletypeReady) {
+    snippetsFiletypeReady = true
+    const rtp = workspace.env.runtimepath
+    let paths = rtp.split(',')
+    let idx = paths.findIndex(s => /^ultisnips$/i.test(path.basename(s)))
+    if (idx === -1 && !workspace.env.isCygwin) {
+      let directory = path.resolve(__dirname, '..')
+      // Re-create the group so a re-activated extension never duplicates the
+      // autocmd. Only append the runtimepath entry when the current snapshot
+      // does not already contain the extension root, so embedders that manage
+      // runtimepath themselves (test harness) stay clean.
+      nvim.command('augroup coc_snippets_filetype | autocmd! | autocmd BufNewFile,BufRead *.snippets setf snippets | augroup END', true)
+      if (!paths.some(p => path.resolve(p) == directory)) {
+        nvim.command(`execute 'noa set rtp+='.fnameescape('${directory.replace(/'/g, "''")}')`, true)
+      }
+    }
+    workspace.onDidOpenTextDocument(async document => {
+      if (document.uri.endsWith('.snippets')) {
+        let doc = workspace.getDocument(document.uri)
+        if (!doc) return
+        let buf = nvim.createBuffer(doc.bufnr)
+        buf.setOption('filetype', 'snippets', true)
+      }
+      checkBufferVariable(workspace.getDocument(document.bufnr))
+    }, null, subscriptions)
   }
   workspace.documents.forEach(doc => {
     if (doc.uri.endsWith('.snippets')) {
@@ -42,14 +62,6 @@ export function enableSnippetsFiletype(subscriptions: Disposable[]) {
     }
     checkBufferVariable(doc)
   })
-  workspace.onDidOpenTextDocument(async document => {
-    if (document.uri.endsWith('.snippets')) {
-      let doc = workspace.getDocument(document.uri)
-      let buf = nvim.createBuffer(doc.bufnr)
-      buf.setOption('filetype', 'snippets', true)
-    }
-    checkBufferVariable(workspace.getDocument(document.bufnr))
-  }, null, subscriptions)
 }
 
 async function snippetSelect(): Promise<void> {
@@ -98,6 +110,13 @@ export async function activate(context: ExtensionContext): Promise<API> {
   const manager = new ProviderManager(channel, subscriptions, configuration)
   events.on('ready' as any, () => {
     enableSnippetsFiletype(subscriptions)
+  }, null, subscriptions)
+  // The extension can be activated after coc.nvim already fired `ready`
+  // (test harness, extension reload). Apply the startup behavior now and let
+  // the ready hook re-run it idempotently on a normal startup.
+  enableSnippetsFiletype(subscriptions)
+  workspace.onDidCloseTextDocument(doc => {
+    clearAdditionalFiletype(doc.bufnr)
   }, null, subscriptions)
   subscriptions.push(commands.registerCommand('snippets.addFiletypes', async (...args: string[]) => {
     let list = args.filter(s => typeof s === 'string')

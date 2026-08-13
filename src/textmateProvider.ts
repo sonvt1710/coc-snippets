@@ -1,6 +1,6 @@
 import { Disposable, Document, Extension, extensions, OutputChannel, Position, Range, Uri, workspace } from 'coc.nvim'
 import fs from 'fs'
-import { parse, ParseError } from 'jsonc-parser'
+import { parse, ParseError } from 'jsonc-parser/lib/esm/main.js'
 import path from 'path'
 import BaseProvider from './baseProvider'
 import { Snippet, SnippetEdit, TextmateConfig, TriggerKind } from './types'
@@ -58,6 +58,36 @@ export class TextmateProvider extends BaseProvider {
     private subscriptions: Disposable[]
   ) {
     super(config, channel)
+    workspace.onDidSaveTextDocument(async doc => {
+      let uri = Uri.parse(doc.uri)
+      if (uri.scheme != 'file') return
+      let filepath = uri.fsPath
+      if (!fs.existsSync(filepath) || !this.isLoaded(filepath)) return
+      let defs = this.loadedSnippets.filter(o => o.filepath == filepath)
+      this.loadedFiles.delete(filepath)
+      this.loadedSnippets = this.loadedSnippets.filter(o => o.filepath != filepath)
+      let languageIds: string[] | undefined
+      let extensionId: string | undefined
+      if (defs.length > 0) {
+        languageIds = defs[0].filetypes
+        extensionId = defs[0].extensionId
+      } else {
+        for (let [id, items] of this.definitions.entries()) {
+          let item = items.find(o => o.filepath == filepath)
+          if (item) {
+            languageIds = item.languageIds
+            extensionId = id == '' ? undefined : id
+            break
+          }
+        }
+      }
+      try {
+        // Global .code-snippets files re-derive scope/comments from content.
+        await this.loadSnippetsFromFile(filepath, filepath.endsWith('.code-snippets') ? undefined : languageIds, extensionId)
+      } catch (e: any) {
+        this.error(`Error on reload "${filepath}": ${e.message}`, e.stack)
+      }
+    }, null, this.subscriptions)
   }
 
   public async init(): Promise<void> {
@@ -94,7 +124,9 @@ export class TextmateProvider extends BaseProvider {
     if (this.config.projectSnippets) {
       workspace.workspaceFolders.forEach(folder => {
         let fsPath = Uri.parse(folder.uri).fsPath
-        void this.loadFromWorkspace(fsPath)
+        void this.loadFromWorkspace(fsPath).catch(e => {
+          this.error(`Error on load workspace snippets: ${e.message}`, e.stack)
+        })
       })
       workspace.onDidChangeWorkspaceFolders(e => {
         e.removed.forEach(folder => {
@@ -103,9 +135,11 @@ export class TextmateProvider extends BaseProvider {
         })
         e.added.forEach(folder => {
           let fsPath = Uri.parse(folder.uri).fsPath
-          void this.loadFromWorkspace(fsPath)
+          void this.loadFromWorkspace(fsPath).catch(e => {
+            this.error(`Error on load workspace snippets: ${e.message}`, e.stack)
+          })
         })
-      })
+      }, null, this.subscriptions)
     }
   }
 

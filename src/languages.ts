@@ -12,6 +12,7 @@ const validOptions = ['b', 'i', 'w', 'r', 'e', 'A', 't', 'm', 's']
 export class LanguageProvider implements CompletionItemProvider {
   public disposables: Disposable[] = []
   private collection: DiagnosticCollection
+  private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
   constructor(private channel: OutputChannel, private trace = 'error') {
     this.collection = languages.createDiagnosticCollection('snippets')
 
@@ -25,16 +26,33 @@ export class LanguageProvider implements CompletionItemProvider {
     workspace.onDidOpenTextDocument(async textDocument => {
       let doc = workspace.getDocument(textDocument.uri)
       if (!this.shouldValidate(doc.uri)) return
-      await this.validate(doc.uri, doc.getDocumentContent())
+      try {
+        await this.validate(doc.uri, doc.getDocumentContent())
+      } catch (e: any) {
+        this.channel.appendLine(`[Error ${(new Date()).toLocaleTimeString()}]: ${e.message}`)
+      }
     }, null, this.disposables)
 
     workspace.onDidChangeTextDocument(async ev => {
       let doc = workspace.getDocument(ev.textDocument.uri)
       if (!doc || !this.shouldValidate(doc.uri)) return
-      await this.validate(doc.uri, doc.getDocumentContent())
+      let uri = doc.uri
+      let timer = this.debounceTimers.get(uri)
+      if (timer) clearTimeout(timer)
+      this.debounceTimers.set(uri, setTimeout(() => {
+        this.debounceTimers.delete(uri)
+        let current = workspace.getDocument(uri)
+        if (!current) return
+        this.validate(uri, current.getDocumentContent()).catch(e => {
+          this.channel.appendLine(`[Error ${(new Date()).toLocaleTimeString()}]: ${e.message}`)
+        })
+      }, 200))
     }, null, this.disposables)
 
     workspace.onDidCloseTextDocument(e => {
+      let timer = this.debounceTimers.get(e.uri)
+      if (timer) clearTimeout(timer)
+      this.debounceTimers.delete(e.uri)
       this.collection.delete(e.uri)
     }, null, this.disposables)
   }

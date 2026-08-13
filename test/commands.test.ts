@@ -3,6 +3,7 @@ import { after, before, describe, it } from 'node:test'
 import { commands, Disposable, window, workspace } from 'coc.nvim'
 import path from 'node:path'
 import extension from '../lib/index.js'
+import { getAdditionalFiletype } from '../src/util'
 import { openBuffer, waitFor, waitProviderInit } from './helper'
 
 const fixturesDir = path.resolve(process.cwd(), 'test', 'fixtures')
@@ -75,6 +76,33 @@ describe('buffer filetype handling', () => {
   it('sets the filetype of .snippets buffers', async () => {
     let doc = await openBuffer('snippet.snippets')
     await waitFor(() => doc.filetype == 'snippets')
+  })
+
+  it('keeps the snippets autocmd and runtimepath entry unique', async () => {
+    // Calling the startup behavior twice (activation plus ready hook) must
+    // not duplicate the autocmd or the extension runtimepath entry.
+    extension.enableSnippetsFiletype(subscriptions)
+    let augroupCount = await workspace.nvim.eval(`len(filter(getcompletion('', 'augroup'), 'v:val ==# "coc_snippets_filetype"'))`) as number
+    assert.equal(augroupCount, 1)
+    let root = path.resolve(process.cwd())
+    // The runtimepath entry is applied with a notification, so poll until
+    // the editor reports it instead of asserting on a racy read.
+    await waitFor(async () => {
+      let rtp = await workspace.nvim.eval('&runtimepath') as string
+      return rtp.split(',').filter(p => path.resolve(p) == root).length == 1
+    })
+  })
+
+  it('clears additional filetypes when the buffer is wiped', async () => {
+    let doc = await openBuffer()
+    let bufnr = doc.bufnr
+    await commands.executeCommand('snippets.addFiletypes', 'python')
+    await waitFor(async () => {
+      let arr = await doc.buffer.getVar('coc_snippets_filetypes') as string[]
+      return Array.isArray(arr) && arr.includes('python')
+    })
+    await workspace.nvim.command('bwipeout!')
+    await waitFor(() => getAdditionalFiletype(bufnr).length == 0)
   })
 })
 

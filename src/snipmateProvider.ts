@@ -35,15 +35,19 @@ export class SnipmateProvider extends BaseProvider {
   ) {
     super(config, channel)
     workspace.onDidSaveTextDocument(async doc => {
-      let uri = Uri.parse(doc.uri)
-      if (uri.scheme != 'file') return
-      let filepath = uri.fsPath
-      if (!fs.existsSync(filepath)) return
-      let idx = this.snippetFiles.findIndex(s => sameFile(s.filepath, filepath))
-      if (idx !== -1) {
-        let filetype = this.snippetFiles[idx].filetype
-        this.snippetFiles.splice(idx, 1)
-        await this.loadSnippetsFromFile(filetype, filepath)
+      try {
+        let uri = Uri.parse(doc.uri)
+        if (uri.scheme != 'file') return
+        let filepath = uri.fsPath
+        if (!fs.existsSync(filepath)) return
+        let idx = this.snippetFiles.findIndex(s => sameFile(s.filepath, filepath))
+        if (idx !== -1) {
+          let filetype = this.snippetFiles[idx].filetype
+          this.snippetFiles.splice(idx, 1)
+          await this.loadSnippetsFromFile(filetype, filepath)
+        }
+      } catch (e: any) {
+        this.error(`Error on reload "${doc.uri}":`, e)
       }
     }, null, this.subscriptions)
   }
@@ -54,16 +58,20 @@ export class SnipmateProvider extends BaseProvider {
     if (!author) nvim.setVar('snips_author', this.config.author, true)
     this.fileItems = await this.loadAllSnippetFiles()
     workspace.onDidRuntimePathChange(async e => {
-      for (let rtp of e) {
-        let items = await this.getSnippetFileItems(path.join(rtp, 'snippets'))
-        if (items?.length) {
-          this.fileItems.push(...items)
-          for (let item of items) {
-            if (workspace.filetypes.has(item.filetype)) {
-              await this.loadSnippetsFromFile(item.filetype, item.filepath)
+      try {
+        for (let rtp of e) {
+          let items = await this.getSnippetFileItems(path.join(rtp, 'snippets'))
+          if (items?.length) {
+            this.fileItems.push(...items)
+            for (let item of items) {
+              if (workspace.filetypes.has(item.filetype)) {
+                await this.loadSnippetsFromFile(item.filetype, item.filepath)
+              }
             }
           }
         }
+      } catch (e: any) {
+        this.error('Error on runtimepath change:', e)
       }
     }, null, this.subscriptions)
   }
@@ -73,10 +81,14 @@ export class SnipmateProvider extends BaseProvider {
     filetypes.push('_')
     filetypes = filetypes.filter(filetype => !this.loadedLanguageIds.has(filetype))
     if (filetypes.length == 0) return
-    filetypes.forEach(filetype => this.loadedLanguageIds.add(filetype))
     for (let item of this.fileItems.slice()) {
       if (!filetypes.includes(item.filetype)) continue
-      await this.loadSnippetsFromFile(item.filetype, item.filepath)
+      try {
+        await this.loadSnippetsFromFile(item.filetype, item.filepath)
+        this.loadedLanguageIds.add(item.filetype)
+      } catch (e: any) {
+        this.error(`Error on load "${item.filetype}" snippets:`, e)
+      }
     }
   }
 

@@ -15,6 +15,7 @@ interface SnippetContent {
 interface HttpConfig {
   headers?: Record<string, string | number>
   host: string
+  timeout?: number
   port: number
   path?: string
   method: 'GET' | 'POST'
@@ -162,6 +163,7 @@ export class MassCodeProvider extends BaseProvider {
           description: item.name,
           triggerKind: TriggerKind.WordBoundary,
           filetype: content.language,
+          priority: -1,
         }
 
         counter = counter + 1
@@ -209,6 +211,7 @@ export class MassCodeProvider extends BaseProvider {
       }
     }
 
+    const created: HttpResponseItem[] = []
     const requests = filetypes.map(filetype => {
       const lnums = this.mapItems().map(item => item.lnum)
       const newIndex = lnums.length ? Math.max(...lnums) + 1 : 0
@@ -227,13 +230,15 @@ export class MassCodeProvider extends BaseProvider {
         updatedAt: Date.now(),
       }
 
-      // Add the new snippet so it is available immediately.
-      // Calling this.init() here does not work
-      this.massCodeItems.push(newSnippet)
+      // Keep the new snippet visible immediately after a successful create,
+      // but only add it once every request succeeded so a failed create
+      // cannot leave a stale snippet in the completion source.
+      created.push(newSnippet)
       return promisifyHttpRequest(config, onEnd, JSON.stringify(newSnippet))
     })
 
     await Promise.all(requests)
+    this.massCodeItems.push(...created)
   }
 }
 
@@ -249,6 +254,7 @@ async function promisifyHttpRequest<T = any>(config: HttpConfig, onEnd: OnEnd, b
 
   return new Promise(function(resolve, reject) {
     const req = http.request(options, function(res) {
+      clearTimeout(timer)
       if (res.statusCode < 200 || res.statusCode >= 300) {
         return reject(new Error('statusCode=' + res.statusCode));
       }
@@ -260,7 +266,12 @@ async function promisifyHttpRequest<T = any>(config: HttpConfig, onEnd: OnEnd, b
         onEnd(resolve, reject, body)
       })
     })
+    const timeout = options.timeout ?? 5000
+    const timer = setTimeout(() => {
+      req.destroy(new Error(`massCode request timed out after ${timeout}ms`))
+    }, timeout)
     req.on('error', function(err: HttpError) {
+      clearTimeout(timer)
       if (err.code === 'ECONNREFUSED') {
         window.showErrorMessage('massCode is not running')
       } else {

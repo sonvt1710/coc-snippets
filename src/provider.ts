@@ -18,9 +18,11 @@ export class ProviderManager implements CompletionItemProvider {
 
   public regist(provider: BaseProvider, name: string): Disposable {
     this.providers.set(name, provider)
-    return Disposable.create(() => {
+    let disposable = Disposable.create(() => {
       this.providers.delete(name)
     })
+    this.subscriptions.push(disposable)
+    return disposable
   }
 
   public get hasProvider(): boolean {
@@ -121,7 +123,11 @@ export class ProviderManager implements CompletionItemProvider {
       try {
         let items = await provider.getTriggerSnippets(doc, position, autoTrigger)
         for (let item of items) {
-          list.push(Object.assign({ source: name }, item))
+          let edit = Object.assign({ source: name }, item)
+          // A provider may not set a numeric priority (e.g. massCode);
+          // normalize it so the sort/filter below never compares NaN.
+          if (typeof edit.priority != 'number') edit.priority = -1
+          list.push(edit)
         }
       } catch (e: any) {
         this.appendError(`get trigger snippets of ${name}`, e)
