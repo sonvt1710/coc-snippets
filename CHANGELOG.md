@@ -1,3 +1,9 @@
+# 3.4.10
+
+- add release.yml
+- chore: upgrade coc-test to esbuild-based 0.1.3
+- fix: address coc-snippets audit findings
+
 # 3.4.3
 
 - Fix snippet file may not loaded.
